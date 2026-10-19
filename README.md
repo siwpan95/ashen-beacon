@@ -139,3 +139,9 @@ game/
 
 新增鉴定时注意：`emit` 不携带参数，参数只能"写进 state 再 emit"或者直接编码在事件名里——
 推荐后者，没有顺序依赖。
+
+## 许可证
+
+MIT © 2026 siwpan。见 [LICENSE](LICENSE)。
+
+依赖的两个引擎同为 MIT：[dse-core](https://pypi.org/project/dse-core/) · [allin-engine](https://pypi.org/project/allin-engine/)。
