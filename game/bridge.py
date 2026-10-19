@@ -21,7 +21,9 @@ pull() 会把所有「可能出现的数据键」都补上缺省值（False / 0�
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +40,11 @@ from data import (
     CARD_AWARDS, ENEMIES, ITEMS, LEARN_TECHNIQUES, PUZZLES, START_ATTRIBUTES,
     START_CP, START_SKILLS, START_TECHNIQUES, STARTING_DECK, make_item,
 )
+
+try:  # 出图依赖 numpy/Pillow；没装就静默关闭，游戏本体照常跑
+    from viz import AVAILABLE as VIZ_AVAILABLE
+except Exception:  # noqa: BLE001 - 任何导入问题都不该影响游戏
+    VIZ_AVAILABLE = False
 
 TECHNIQUES = list(LEARN_TECHNIQUES)
 
@@ -107,6 +114,8 @@ class AllinBridge(Service):
         self.battle_pending: dict | None = None
         self.puzzle_active: str | None = None
         self.log_lines: list[str] = []
+        self.telemetry: dict | None = None   # 当前战斗的遥测数据（喂给战报出图）
+        self._telem_pre: tuple | None = None
 
         self._boot_allin()
         self._wire()
@@ -428,6 +437,17 @@ class AllinBridge(Service):
         mx = max(1, int(self.char.max_hp))
         self.combat_start_hp = hp
         self.combat_log = []
+        self.telemetry = {
+            "enemy": inst.name,
+            "scene": self._scene_label(),
+            "hp_series": [hp],
+            "enemy_series": [int(inst.hp)],
+            "cards": {},
+            "damage_dealt": 0,
+            "damage_taken": 0,
+            "blocked": 0,
+            "healed": 0,
+        }
 
         self.combat = self.combat_engine.start_combat(
             hp, mx, 40, 40, inst, list(self.deck.cards),
@@ -435,6 +455,38 @@ class AllinBridge(Service):
         )
         self.combat_cfg = cfg
         self._render_combat(clear=True)
+
+    def _scene_label(self) -> str:
+        """当前场景的中文名（拿不到就退回场景 id，再退回空串）。"""
+        try:
+            sid = self.ctx.engine.current
+            scene = self.ctx.scenes.get(sid) or {}
+            return str(scene.get("title") or scene.get("name") or sid or "")
+        except Exception:  # noqa: BLE001 - 标签拿不到不该影响战斗
+            return ""
+
+    def _telem_mark(self) -> None:
+        """动作前记一次快照，之后 _telem_take 用差值结算遥测。"""
+        st = self.combat
+        self._telem_pre = (st.player_hp, st.enemy.hp) if st is not None else None
+
+    def _telem_take(self, card=None) -> None:
+        st, t = self.combat, self.telemetry
+        if st is None or t is None or self._telem_pre is None:
+            return
+        php_pre, ehp_pre = self._telem_pre
+        self._telem_pre = None
+        t["damage_dealt"] += max(0, int(ehp_pre - st.enemy.hp))
+        d = int(st.player_hp - php_pre)
+        if d < 0:
+            t["damage_taken"] += -d
+        else:
+            t["healed"] += d
+        if card is not None:
+            t["cards"][card.name] = t["cards"].get(card.name, 0) + 1
+            t["blocked"] += int(card.block or 0)
+        t["hp_series"].append(max(0, int(st.player_hp)))
+        t["enemy_series"].append(max(0, int(st.enemy.hp)))
 
     def _render_combat(self, clear: bool = False) -> None:
         io, st = self.ctx.io, self.combat
@@ -475,8 +527,10 @@ class AllinBridge(Service):
         low = line.strip().lower()
 
         if low in ("e", "end", "结束"):
+            self._telem_mark()
             self.combat_engine.end_player_turn()
             self._resolve_checks()
+            self._telem_take()
             if not st.combat_over:
                 self._render_combat()
             return self._maybe_finish() or {"type": "noop"}
@@ -496,9 +550,15 @@ class AllinBridge(Service):
         except ValueError:
             return {"type": "noop"}
 
-        if 0 <= idx < len(st.hand) and self.combat_engine.play_card(idx):
-            self._resolve_checks()
-            self._render_combat()
+        if 0 <= idx < len(st.hand):
+            card = st.hand[idx]
+            self._telem_mark()
+            if self.combat_engine.play_card(idx):
+                self._telem_take(card)
+                self._resolve_checks()
+                self._render_combat()
+            else:
+                io.print("  行动点不够，或者这张牌打不出。")
         else:
             io.print("  行动点不够，或者这张牌打不出。")
         result = self._maybe_finish()
@@ -526,6 +586,8 @@ class AllinBridge(Service):
         else:
             io.print("  你的膝盖先着了地。视野在收紧……")
 
+        self._emit_battle_report(won, int(st.turn_number))
+        self.telemetry = None
         self.combat = None
         target = self.combat_cfg.get("onWin" if won else "onLose")
         if not target:
@@ -538,6 +600,58 @@ class AllinBridge(Service):
         mx = max(1, int(self.char.max_hp))
         self.char.current_hp = max(0, min(mx, int(battle_hp)))
         self.pull()
+
+    # ------------------------------------------------------------ 出图
+
+    def _out_dir(self):
+        return self.ctx.root / "out"
+
+    def _emit_battle_report(self, won: bool, turns: int) -> None:
+        """战斗结束把遥测烘成一张战报图。失败静默——出图永远不值得打断游戏。"""
+        if not VIZ_AVAILABLE or self.telemetry is None:
+            return
+        try:
+            from viz.report import battle_report
+
+            t = dict(self.telemetry)
+            t.update({
+                "result": "win" if won else "lose",
+                "turns": turns,
+                "player_max_hp": int(self.char.max_hp),
+                "enemy_max_hp": int(t.get("enemy_max_hp") or max(t["enemy_series"] + [1])),
+            })
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            path = battle_report(t, self._out_dir() / f"battle_{stamp}.png")
+            self.ctx.io.print(f"  ✦ 战报已生成：{path.name}")
+        except Exception as exc:  # noqa: BLE001 - 出图问题不影响游戏
+            if os.environ.get("DSE_DEBUG"):
+                print(f"[viz] 战报生成失败：{exc!r}")
+
+    def _emit_character_sheet(self) -> None:
+        """stats 命令顺手出一张角色卡图。"""
+        if not VIZ_AVAILABLE:
+            return
+        try:
+            from viz.report import character_sheet
+
+            c = self.char
+            items = [(it.name, it.quantity) for it in self.inv.list_all()]
+            data = {
+                "name": "柯岚",
+                "hp": int(c.current_hp or 0),
+                "max_hp": int(c.max_hp),
+                "attributes": dict(c.attributes),
+                "skills": dict(c.skills),
+                "techniques": [t for t in TECHNIQUES if c.has_technique(t)],
+                "items": items,
+                "cards": len(self.deck.cards),
+                "locales": self.world.get_data("known_locales", 0) or 0,
+            }
+            path = character_sheet(data, self._out_dir() / "character_sheet.png")
+            self.ctx.io.print(f"  ✦ 角色卡已生成：{path.name}")
+        except Exception as exc:  # noqa: BLE001
+            if os.environ.get("DSE_DEBUG"):
+                print(f"[viz] 角色卡生成失败：{exc!r}")
 
     # ------------------------------------------------------------ 命令
 
@@ -636,6 +750,7 @@ class AllinBridge(Service):
         io.print("  技能：" + "  ".join(f"{k} {v}" for k, v in sk) if sk else "  技能：无")
         io.print("  技术：" + ("、".join(t for t in TECHNIQUES if c.has_technique(t)) or "无"))
         io.print(f"  近战 +{c.attack_bonus()} · 远程 +{c.attack_bonus(False)}")
+        self._emit_character_sheet()
         io.blank()
 
     def do_help(self) -> None:

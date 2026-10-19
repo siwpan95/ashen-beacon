@@ -10,11 +10,13 @@
 
 ```bash
 pip install dse-core allin-engine
+pip install numpy pillow        # 可选：装了才有战报/角色卡出图
 cd game
 python play.py                  # 开始玩
 python play.py --check           # 只做内容体检（悬空跳转 / 结局可达）
 python play.py --script "1,1"    # 非交互跑一串输入
 python play.py --entry library-hill    # 从任意场景开始（调试用）
+python -m viz.demo               # 不跑游戏，直接出两张示例图
 ```
 
 ## 玩法
@@ -118,6 +120,36 @@ do:      { emit: 'allin/train:活力' }           # 技能升级
 
 Boss 是真的会输的，别带着 15 点血往上撞。
 
+## 纹理贴图出图（数据可视化）
+
+装上 `numpy pillow` 后，游戏会自动把对局数据烘成图片（没装就静默关闭，游戏照常跑）：
+
+- **每场战斗结束** → `game/out/battle_<时间戳>.png`：血量曲线、四项结算数字牌、出牌分布、胜败印章；
+- **`stats` 命令** → `game/out/character_sheet.png`：属性雷达、技能条、技术标签、背包。
+
+![战报示例](docs/demo_battle.png)
+![角色卡示例](docs/demo_sheet.png)
+
+整条管线是手工实现的纹理贴图（`game/viz/`，无 matplotlib、无第三方绘图库）：
+
+```
+noise     Perlin / fBm / 域扭曲 / Worley   ← 程序化材质的来源
+datatex   数据烘焙成单通道纹理 → 1D 色带 LUT 上色 → 梯度法线凹凸光照 → 图层混合
+canvas    numpy 像素合成 + Pillow 文字；paste_quad() 单应变换 UV 贴图
+charts    折线 / 横向条形 / 雷达 / 进度条（直接画在 Canvas 上）
+report    战报(1180×820) 与角色卡(1000×720) 的排版
+```
+
+其中 `paste_quad()` 是真正的纹理映射：求 dst→src 的 8 自由度单应矩阵，
+用 `PIL.Image.transform(PERSPECTIVE)` 逐像素反向采样——所以战报右侧的数字牌是
+「斜放在沙地上的铁牌」，而不是一张贴上去的矩形图。
+
+### 游戏数据怎么变成图
+
+`bridge.py` 在战斗中做遥测（`_telem_mark` / `_telem_take`，动作前后快照差分）：
+出牌次数、双方血量序列、造成/承受伤害、获得格挡、治疗。战斗结束把整包数据交给
+`report.battle_report()`。`stats` 则直接从 TRPG 角色 + 背包 + 卡组现读。
+
 ## 文件
 
 ```
@@ -127,7 +159,10 @@ game/
 ├── bridge.py            ★ 双引擎桥接（dse Service 插件）
 ├── data.py              物品 / 敌人 / 卡组 / 谜题 / 开局配点
 ├── content/beacon.yml   全部场景文本（改剧情只动这里）
+├── viz/                 ★ 纹理贴图出图（noise/datatex/canvas/charts/report）
+├── out/                 战报与角色卡（运行时生成）
 └── saves/               存档（运行时生成）
+docs/                   示例图
 ```
 
 ## 改自己的游戏
