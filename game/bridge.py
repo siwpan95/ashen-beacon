@@ -37,8 +37,9 @@ from allin_engine.systems.combat import CardDeck, CombatEngine, EnemyInstance
 from allin_engine.trpg import Character, preset_trpg
 
 from data import (
-    CARD_AWARDS, ENEMIES, ITEMS, LEARN_TECHNIQUES, PUZZLES, START_ATTRIBUTES,
-    START_CP, START_SKILLS, START_TECHNIQUES, STARTING_DECK, make_item,
+    CARD_AWARDS, ENEMIES, ITEMS, LEARN_TECHNIQUES, PUZZLES, RECIPES,
+    START_ATTRIBUTES, START_CP, START_SKILLS, START_TECHNIQUES, STARTING_DECK,
+    make_item,
 )
 
 try:  # 出图依赖 numpy/Pillow；没装就静默关闭，游戏本体照常跑
@@ -52,6 +53,7 @@ TECHNIQUES = list(LEARN_TECHNIQUES)
 _PASSTHROUGH = {"help", "?", "quit", "exit", "rollback", "rb", "back"}
 
 _BOX_W = 46   # 战斗面板内宽（显示列数）
+_SCRAP_RATE = 6   # 1 废铁折算多少经营资金（集市用）
 
 
 def _dw(text: str) -> int:
@@ -225,7 +227,18 @@ class AllinBridge(Service):
                 # 不挂这个钩子的话，重开时必须带着 0 HP 再走一遍。
                 self.on(name, self._ev_rebirth)
             elif name.startswith("allin/gain:"):
-                self.on(name, lambda _n=name: self.gain(_n.split(":", 1)[1]))
+                # allin/gain:<物品>[:<数量>] —— 数量缺省 1
+                parts = name.split(":")
+                n = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
+                self.on(name, lambda _i=parts[1], _n=n: self.gain(_i, _n))
+            elif name.startswith("allin/craft:"):
+                self.on(name, lambda _n=name: self.craft(_n.split(":", 1)[1]))
+            elif name == "allin/market:open":
+                # 进集市：把背囊里的废铁折成经营用的钱（1 废铁 = 6）
+                self.on(name, self._ev_market_open)
+            elif name == "allin/market:close":
+                # 收市：钱换回废铁，余数留着（下次进集市接着用）
+                self.on(name, self._ev_market_close)
             elif name.startswith("allin/lose:"):
                 self.on(name, lambda _n=name: self.lose(_n.split(":", 1)[1]))
             elif name.startswith("allin/pay:"):
@@ -240,7 +253,7 @@ class AllinBridge(Service):
             elif name.startswith("allin/train:"):
                 self.on(name, lambda _n=name: self.train(_n.split(":", 1)[1]))
             elif name.startswith("allin/puzzle:"):
-                self.on(name, lambda _n=name: setattr(self, "puzzle_active", _n.split(":", 1)[1]))
+                self.on(name, lambda _n=name: self._open_puzzle(_n.split(":", 1)[1]))
 
     # ------------------------------------------------------------ allin -> dse
 
@@ -270,6 +283,12 @@ class AllinBridge(Service):
 
         st.set("allin.cards", self.deck.count)
         st.set("allin.locales", self.world.get_data("known_locales", 0) or 0)
+
+        # 累积变量：信号强度 = 你身上所有跟「收/发」有关的东西凑出来的值。
+        # 终章按这个值决定广播能传多远 —— 一件件小事攒出来的结局差异。
+        st.set("allin.signal",
+               self.inv.count("radio") * 2 + self.inv.count("battery")
+               + self.inv.count("lens") + self.inv.count("wire"))
         st.set("allin.floor", hp <= int(mx * 0.3))
 
     # ------------------------------------------------------------ 物品 / 角色
@@ -295,6 +314,81 @@ class AllinBridge(Service):
             self.inv.remove(item_id, n)
             self.ctx.io.print(f"  － {ITEMS[item_id]['name']}" + (f" ×{n}" if n > 1 else ""))
         self.pull()
+
+    def craft(self, recipe_id: str) -> None:
+        """按配方合成：材料齐了才扣，扣完才给产物（不半途扣一半）。"""
+        spec = RECIPES.get(recipe_id)
+        if not spec:
+            self.ctx.io.print(f"  [未知配方 {recipe_id}]")
+            return
+        missing = [f"{ITEMS[i]['name']}×{n}" for i, n in spec["needs"]
+                   if self.inv.count(i) < n]
+        if missing:
+            self.ctx.io.print(f"  材料不够：缺 {'、'.join(missing)}")
+            return
+        for i, n in spec["needs"]:
+            self.inv.remove(i, n)
+        out_id, out_n = spec["yields"]
+        self.inv.add(make_item(out_id, out_n))
+        self.ctx.io.print(f"  ✦ 合成：{spec['name']} → {ITEMS[out_id]['name']} ×{out_n}")
+        self.pull()
+
+    def _ev_market_open(self) -> None:
+        """背囊里的废铁折成经营资金。
+
+        第一次进市营地赊你 30 底钱（否则两手空空的人根本开不了张）；
+        只赊一次，用 flags.marketCredited 记账 —— 不记账的话反复进出就能刷钱。
+        """
+        st = self.ctx.state
+        have = self.inv.count("scrap")
+        if have:
+            self.inv.remove("scrap", have)
+        credited = bool(st.get("flags.marketCredited"))
+        st.set("flags.marketCredited", True)
+        floor = 0 if credited else 30
+        st.set("gold", int(st.get("gold") or 0) + have * _SCRAP_RATE + floor)
+        if have:
+            self.ctx.io.print(f"  ✦ 折了 {have} 块废铁，手头 {st.get('gold')} 块。")
+        elif floor:
+            self.ctx.io.print(f"  ✦ 老陈赊你 {floor} 块：『挣了还我，赔了算我的。』")
+        self.pull()
+
+    def _ev_market_close(self) -> None:
+        """收市结算：钱按 1 废铁 = 6 换回废铁，零头留着。"""
+        st = self.ctx.state
+        gold = int(st.get("gold") or 0)
+        back = gold // _SCRAP_RATE
+        st.set("gold", gold - back * _SCRAP_RATE)
+        if back:
+            self.inv.add(make_item("scrap", back))
+            self.ctx.io.print(f"  ✦ 收市，换回 {back} 块废铁。")
+        self.pull()
+
+    def _grant_rewards(self, rewards: dict | None) -> None:
+        """谜题奖励：item 进背包、card 进卡组、flag 回写 dse 的 state.flags。"""
+        for k, v in (rewards or {}).items():
+            if k == "item":
+                self.gain(v)
+            elif k == "card":
+                self.award(v)
+            elif k == "flag":
+                self.ctx.state.set(f"flags.{v}", True)
+
+    def _open_puzzle(self, pid: str) -> None:
+        """进入谜题场景：把题干打出来；道德困境额外列出可选项。"""
+        self.puzzle_active = pid
+        spec = self.puzzles.get_puzzle(pid)
+        if spec is None:
+            return
+        io = self.ctx.io
+        if spec.puzzle_type == "moral_dilemma" and getattr(spec, "options", None):
+            io.blank()
+            io.print(f"  {spec.description}")
+            io.blank()
+            for i, opt in enumerate(spec.options, 1):
+                io.print(f"    [{i}] {opt['text']}")
+            io.print("  输入 answer <编号>，例如 answer 2")
+            io.blank()
 
     def train(self, skill: str) -> None:
         """技能提升一级（花 CP）。"""
@@ -690,14 +784,20 @@ class AllinBridge(Service):
                 res = self.puzzles.verify_answer(self.puzzle_active, guess)
                 self.ctx.io.print(f"  {res['message']}")
                 if res["success"]:
-                    for k, v in (res.get("rewards") or {}).items():
-                        if k == "item":
-                            self.gain(v)
+                    self._grant_rewards(res.get("rewards"))
                     self.puzzle_active = None
                 elif res.get("hint"):
                     self.ctx.io.print(f"  提示：{res['hint']}")
                 return self._refresh()
             return None
+
+        if low in ("recipes", "配方"):
+            self.do_recipes()
+            return {"type": "noop"}
+
+        if low.startswith("craft "):
+            self.craft(raw.split(None, 1)[1].strip())
+            return self._refresh()
 
         if low in ("inv", "bag", "背包"):
             self.do_inv()
@@ -738,6 +838,22 @@ class AllinBridge(Service):
         io.print("  输入 use <id> 使用，例如 use medkit")
         io.blank()
 
+    def do_recipes(self) -> None:
+        """列出配方：能做的标 ○，缺材料的标出缺什么。"""
+        io = self.ctx.io
+        io.blank()
+        io.print("  ─── 配方 ───")
+        for rid, spec in RECIPES.items():
+            missing = [f"{ITEMS[i]['name']}×{n - self.inv.count(i)}"
+                       for i, n in spec["needs"] if self.inv.count(i) < n]
+            out_id, out_n = spec["yields"]
+            mark = "○" if not missing else "×"
+            io.print(f"  {mark} {rid}：{spec['name']} → {ITEMS[out_id]['name']} ×{out_n}")
+            if missing:
+                io.print(f"      缺 {'、'.join(missing)}")
+        io.print("  输入 craft <配方名> 合成，例如 craft makeshift_kit")
+        io.blank()
+
     def do_stats(self) -> None:
         io = self.ctx.io
         c = self.char
@@ -762,6 +878,7 @@ class AllinBridge(Service):
         io.print("  check <技能> <DC>   掷一次判定，例：check 侦察 11")
         io.print("  answer <答案>   回答谜题，例：answer 4173")
         io.print("  use <id>        用东西，例：use medkit")
+        io.print("  recipes / craft <配方>   看配方 / 合成，例：craft makeshift_kit")
         io.print("  save / load <槽> / slots     存档 / 读档 / 列出")
         io.print("  rollback [n]    回退 n 个选择点")
         io.print("  quit            退出")

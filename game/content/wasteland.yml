@@ -1,0 +1,541 @@
+pack:
+  id: wasteland
+  name: 灰烬信标 · 外圈
+  version: 1.0.0
+  description: 第二批内容：外圈区域、新遭遇、道德困境、累积变量
+  author: siwpan
+  modes: [battle]
+
+scenes:
+
+  # ═══════════════════════════════════════════════ 南 · 营地（对话 / 集市 / 两难）
+
+  camp-talk:
+    title: 跟老陈坐着聊会儿
+    # 注意点预算 4：六个话题只能问四个 —— 逼你取舍，也逼你重玩时换着问
+    mode: dialogue
+    dialogue:
+      npc: 老陈
+      notes: 4
+      onEnd: scav-camp
+      topics:
+        - id: tower
+          name: 那座塔
+          reply: |
+            「塔？塔是真的。我年轻时候见过它亮，那会儿我爹还活着，说那是航标 ——
+            给飞机看的，不是给人看的。」
+            「你要去也行。但你想清楚：去了的人没回来，不代表他们死了，
+            也可能代表他们不想回来。」
+        - id: radio
+          name: 第七号电台
+          reply: |
+            「电台是塔自己。它一直在播，播的是同一句，三十年。
+            你是不是以为有人在里面说话？」他笑了一下，「没人。是个环路，
+            一段录音放完了自己接上自己。」
+            他顿了顿。「但放录音的机器得有人开机。所以还是有人在。」
+          effect: { cred: 1 }
+        - id: north
+          name: 往北的人
+          if: 'flags.campTold'
+          reply: |
+            「往北的十几个，我知道名字的四个。」
+            他掰着手指数，数完把手放下。「回来的两个。一个走回来的，一个爬回来的。
+            爬回来那个，去年冬天死了。临死前他说，塔下面有灯，是绿的，不是红的。」
+          effect: { cred: 1 }
+        - id: medicine
+          name: 药是从哪来的
+          reply: |
+            「药？」他往火里添了根柴，「从死人身上来的。从塌了的医院里挖出来的。
+            你以为哪来的。」
+            他从怀里摸出一板药，掰了两片给你。「拿着。别问我为什么给你，
+            我也不知道。可能是我还想有个人往北边走一趟。」
+          effect:
+            emit: 'allin/gain:medkit'
+            cred: 1
+        - id: market
+          name: 这儿的行情
+          reply: |
+            「三天一小集。第一天啥都贵，第二天有人贱卖，第三天有人收货。
+            规矩是：第一天别买，第二天买药，第三天卖零件。」
+            「你要有本钱就去试试。钱这东西在废土上没用，但能换成有用的东西 ——
+            所以还是有用。」他自己被这句话绕笑了。
+          effect: { cred: 1 }
+        - id: her
+          name: 摆摊那个婆娘
+          reply: |
+            「她？她姓什么没人知道。她男人是往北那十几个里的一个。」
+            「她在这儿摆了三年摊，等着。你要是往北走，路上看见什么，回来告诉她一声。
+            什么都行，哪怕是『没看见』—— 『没看见』也是个信儿。」
+          effect:
+            cred: 2
+            'flags.knowsHer': true
+    text: |
+      老陈往火堆边挪了挪，给你腾出一块能坐的地方。
+      他不看你，看着火。「问吧。问完了我还得翻锅。」
+
+      （输入 topics 看能问什么，ask <编号或名字> 问，end 站起来。注意点有限，挑着问。）
+
+  camp-dilemma:
+    title: 丢的两支抗生素
+    text: |
+      头子把你按在火堆边坐下，隔着烟看你。
+
+      「昨晚上丢了两支抗生素。就那丫头，十三四，瘦得像根柴，脚上没鞋。」
+      「你要是帮我把她拎回来，我分你一半。你要是有别的想法，也行 ——
+      但药得回来。三十口人，两支药，你算得清这个账。」
+
+      他等着。火在他脸上一跳一跳。
+    extraText:
+      - if: 'flags.knowsHer'
+        text: 你想起来老陈说过：摆摊那个婆娘，男人是往北那十几个里的一个。这儿的人都欠着北边一笔账。
+    onEnter: { emit: 'allin/puzzle:camp_dilemma' }
+    choices:
+      - text: '（输入 answer 加编号，选一个：1 交人 / 2 放走 / 3 不管）'
+        if: 'not allin.solved.camp_dilemma'
+        goto: camp-dilemma
+      - text: 站起来，把这事放下
+        if: 'allin.solved.camp_dilemma'
+        goto: scav-camp
+
+  camp-market:
+    title: 南边营地 · 三日集
+    mode: trade
+    trade:
+      name: 南边营地 · 三日集
+      days: 3
+      onEnd: market-close
+    onEnter: { emit: 'allin/market:open' }
+    text: |
+      防水布一块挨一块铺开，摆什么的都有。
+      有人喊价，有人不喊，只是把手伸出来比划 —— 这地方多半人不信嘴，信手。
+
+      （buy <东西> [数量] 进货 · sell <东西> [数量] 出货 · next 过一天 · info 看行情）
+
+  market-close:
+    title: 收市
+    text: |
+      第三天太阳偏西，摊子开始收。有人把你叫住，问你手里还剩什么，出价不高但给现成。
+      你把钱换成能背走的东西，一样一样塞进背囊。
+
+      老陈在火边冲你抬了下下巴，意思是：还活着？你也抬了一下。
+    onEnter: { emit: 'allin/market:close' }
+    choices:
+      - text: 回营地
+        goto: scav-camp
+
+  # ═══════════════════════════════════════════════ 北 · 净水站
+
+  water-tower:
+    title: 北边 · 净水站
+    # variants：同一处地方每次来看到的不一样（环境碎片）—— 进入时抽一条，重绘不重抽
+    variants:
+      - |
+        水塔立在一片空地上，塔身刷过标语，只剩「饮」字的右半边。
+        底下是泵房，门开着，里面黑得干净 —— 没有垃圾，说明常有人来。
+      - |
+        水塔的水槽裂了一道缝，水顺着缝往下淌，在地上冲出一个小坑。
+        坑边上长了一圈草，绿得不合时宜。
+      - |
+        泵房的门被人用铁丝拧上了。拧的人很仔细，一圈一圈绕得很整齐 ——
+        他打算回来。
+    variantMode: shuffle
+    text: |
+      你绕到泵房背面。水槽的阴影里趴着一圈东西，听见脚步声，一起转过头。
+      是鼠。个头不大，但数量让人心里发毛，而且它们不怕人 ——
+      不怕人的东西，通常是吃过人的。
+    choices:
+      - text: 退到门口，把它们引出来打
+        goto: fight-swarm
+      - text: '（输入 check 潜行 12，贴着墙根绕过去）'
+        goto: chk-water-sneak
+      - text: 不惹它们，回公路
+        goto: road-north
+
+  chk-water-sneak:
+    title: 贴着墙根
+    text: |
+      你贴着泵房的墙走，鞋底放平，呼吸压住。
+      {allin.rollLine}
+    onEnter: { emit: 'allin/check:潜行:12' }
+    choices:
+      - text: '过去了。它们还在啃那堆软的东西，没工夫抬头'
+        if: 'allin.ok'
+        goto: pump-room
+      - text: '有东西踩响了。整圈脑袋同时转过来'
+        if: 'not allin.ok'
+        goto: fight-swarm
+
+  fight-swarm:
+    title: 水槽下的东西
+    text: |
+      第一只扑上来的时候你把它踢开了，第二只已经咬住了裤脚。
+      它们不是一只一只来的 —— 它们是同时来的。
+    mode: battle
+    battle:
+      enemy: swarm
+      onWin: pump-room
+      onLose: down
+      onFlee: water-tower
+
+  pump-room:
+    title: 泵房
+    text: |
+      泵房里比外面凉。柴油发电机蹲在墙角，旁边是那台水泵 ——
+      电机烧了，外壳裂了一道，铜线从裂口里支出来，像骨头。
+
+      烧得不重。有铜线、有半天时间，它能转起来。
+      南边营地三十来口人，靠这口井活。
+    extraText:
+      - if: 'allin.item.wire >= 2'
+        text: 你背囊里有铜线。够接。
+      - if: 'flags.savedCamp'
+        text: 水泵在响。你想起来这是你接的。
+    choices:
+      - text: '（你有铜线）把电机接上（消耗 2 铜线）'
+        if: 'allin.item.wire >= 2'
+        do:
+          emit: 'allin/lose:wire:2'
+          'flags.savedCamp': true
+        goto: water-fixed
+      - text: 把裂口里那截铜线抽出来带走
+        do:
+          emit: 'allin/gain:wire:2'
+          'flags.strippedPump': true
+        goto: water-tower
+      - text: 不碰它。这不是你的井
+        goto: road-north
+
+  water-fixed:
+    title: 水来了
+    text: |
+      最后一圈胶带缠上去，你合上电闸。
+      电机咳了一声，转起来，然后是水泵，然后是管子 ——
+      管子那头的水被推上来，先是空气，然后是泥，最后才是水。
+
+      你站在那儿等它变清。等了很久。
+      水清了以后你接了满满两壶，一壶喝了，一壶塞进背囊。
+    onEnter:
+      emit: ['allin/gain:water:2']
+    choices:
+      - text: 把泵房的门带上，回公路
+        goto: road-north
+
+  # ═══════════════════════════════════════════════ 东北 · 中继站
+
+  relay-station:
+    title: 东北 · 铁架子
+    variants:
+      - |
+        一座信号中继塔，二十来米，架在四根拉线上，拉线松了两根，塔身往北歪着。
+        底下是配电小屋，屋顶塌了一角。
+      - |
+        铁架子在风里有轻微的响声，像有人在很高的地方调弦。
+        塔顶的航障灯还剩一盏，白天也亮着，很弱。
+    variantMode: shuffle
+    text: |
+      塔上有东西在动。不是风吹的那种动 —— 是绕着圈、有间隔的那种动。
+      它每隔一会儿就俯冲一次，冲到一半又拉起来，像在圈一块地。
+    choices:
+      - text: '（输入 check 侦察 11，先看清它绕的是什么）'
+        goto: chk-relay-scout
+      - text: 不管它，直接上塔
+        goto: fight-drone
+      - text: 回公路
+        goto: road-north
+
+  chk-relay-scout:
+    title: 抬头看
+    text: |
+      你仰着头数它的圈。数到第七圈的时候看明白了 ——
+      {allin.rollLine}
+    onEnter: { emit: 'allin/check:侦察:11' }
+    choices:
+      - text: '它不是在圈地，它是在守巢 —— 塔顶挂着个方的东西，天线还在上面'
+        if: 'allin.ok'
+        do: { 'flags.sawNest': true }
+        goto: fight-drone
+      - text: '看不出来。它就那么绕着'
+        if: 'not allin.ok'
+        goto: fight-drone
+
+  fight-drone:
+    title: 塔顶那台
+    text: |
+      东西从塔顶下来的时候没有声音，等你听见螺旋桨的时候它已经在头顶了。
+      红点在胸口停了一瞬 —— 那一瞬比挨一下还难受。
+    mode: battle
+    battle:
+      enemy: drone
+      onWin: relay-panel
+      onLose: down
+      onFlee: relay-station
+
+  relay-panel:
+    title: 配电小屋
+    text: |
+      小屋里是一面配电盘。三根保险丝，三个槽位，槽位下面有人用铅笔写了号：1、2、3。
+      最右边那根的玻璃管是黑的 —— 烧了。中间那根发黄。左边那根还是亮的。
+
+      盘子上贴着一张纸条，字很丑：「先拔没电的。别问我怎么知道的。」
+    extraText:
+      - if: 'allin.solved.relay_fuse'
+        text: |
+          三根都换好了。盘上的绿灯亮着，塔顶那盏航障灯比刚才亮了一点。
+      - if: 'flags.sawNest'
+        text: 你记得塔顶还有个方的东西 —— 天线。这塔修好了，它能替你把声音传得更远。
+    onEnter: { emit: 'allin/puzzle:relay_fuse' }
+    choices:
+      - text: '（输入 answer 加三位数，例如 answer 321）'
+        if: 'not allin.solved.relay_fuse'
+        goto: relay-panel
+      - text: 爬上塔顶，把那台天线拆下来
+        if: 'allin.solved.relay_fuse'
+        goto: relay-after
+      - text: 回公路
+        goto: road-north
+
+  relay-after:
+    title: 塔顶
+    text: |
+      天线比你想的沉。馈线被人用胶带缠了七八圈，缠得很紧，你得用刀割。
+      割到第三圈的时候你停了一下 —— 缠的人是在保护它，不是在固定它。
+
+      你把天线绑在背囊外面，铜线做的那一截在太阳底下亮得刺眼。
+      从这儿往北看，那座塔的轮廓清楚了一点。
+    onEnter:
+      'flags.relayFixed': true
+      emit: ['allin/gain:wire:2', 'allin/gain:lens']
+    choices:
+      - text: 下来，回公路
+        goto: road-north
+
+  # ═══════════════════════════════════════════════ 东 · 工地地下室
+
+  wreck-cellar:
+    title: 塌方下面的地下室
+    text: |
+      水泥板底下压着一道缝，缝里有风上来，风是凉的。
+      你把板子撬开半米，侧身挤了进去。
+
+      下面是这栋楼原来的地下室。货架倒了一地，罐头的标签泡烂了。
+      墙角坐着一个人。
+
+      穿着整套防化服，面罩在里面起雾了，看不清脸。他的手放在膝盖上，
+      姿势很端正 —— 像是坐下来歇一会儿，然后忘了站起来。
+    choices:
+      - text: 走过去看看
+        goto: fight-husk
+      - text: 先把货架上的东西翻一遍，别管他
+        goto: wreck-cellar-loot
+      - text: 退回去，把水泥板盖好
+        goto: wreck-site
+
+  wreck-cellar-loot:
+    title: 翻货架
+    text: |
+      罐头基本都鼓了。你挑了三罐没鼓的塞进背囊，
+      又在倒了的货架底下摸出一卷铜线和一盘录音带。
+
+      你翻东西的时候一直用余光盯着墙角那位。他没动。
+      但你第二次抬头的时候，他换了个姿势。
+    onEnter:
+      emit: ['allin/gain:wire', 'allin/gain:tape', 'allin/gain:ration']
+    choices:
+      - text: 现在走，还来得及
+        goto: wreck-site
+      - text: 既然都到这儿了，过去看看他
+        goto: fight-husk
+
+  fight-husk:
+    title: 坐着的那个
+    text: |
+      你走到第三步的时候他站起来了。
+      站得很慢，慢得你能听见关节里的声音 —— 那不是骨头，那是防化服里的干燥剂在被压碎。
+
+      面罩后面什么都没有。不是黑，是什么都没有。
+    mode: battle
+    battle:
+      enemy: husk
+      onWin: cellar-after
+      onLose: down
+      onFlee: wreck-site
+
+  cellar-after:
+    title: 他倒在货架边
+    text: |
+      他倒下去以后就不再动了，散成一堆布和塑料。
+      你蹲下来在他口袋里摸了摸 —— 一串钥匙，两张照片，一块金属牌。
+
+      金属牌上刻着编号和血型。编号被人用刀划掉了，划得很用力，划了七八道。
+    extraText:
+      - if: 'allin.item.radio >= 1'
+        text: |
+          你把录音带塞进收音机。A 面是一段很长的底噪，底噪里有个男人在念地名，
+          一个一个念，念到第七个的时候停了，然后是一句：
+          「……如果你听见这个，别往北。往北的人都没有回来。往西。」
+
+          带子到这里断了。B 面是空的。
+    onEnter:
+      emit: ['allin/gain:dogtag', 'allin/gain:fuse']
+    choices:
+      - text: 把金属牌收好，爬出去
+        goto: wreck-site
+
+  # ═══════════════════════════════════════════════ 西 · 图书馆地下书库
+
+  library-under:
+    title: 书架底下那层
+    text: |
+      阅览室的地板有一块是空的，敲上去发闷。撬开以后是向下的铁梯，六蹬。
+
+      下面是书库。比楼上干，也比楼上冷。
+      书架一排一排站得很直，书都在，纸脆得像枯叶 —— 但你认得出来这是按什么排的：
+      不是按书名，是按「哪一年印的」。
+
+      最里面那排是四十年前的东西，用油布盖着。
+    choices:
+      - text: '（输入 check 调查 12，看看这层还藏着什么）'
+        once: 'under-search'
+        goto: chk-library-under
+      - text: 掀开最里面那排的油布
+        once: 'under-oilcloth'
+        goto: library-oilcloth
+      - text: 上去
+        goto: library-sealed
+
+  chk-library-under:
+    title: 蹲在书架之间
+    text: |
+      你顺着书架走，看编号，看灰尘厚薄，看哪几本被人抽出来又塞回去过。
+      {allin.rollLine}
+    onEnter: { emit: 'allin/check:调查:12' }
+    choices:
+      - text: '第三排被人反复抽过 —— 你把手伸进去，摸出一个铁皮盒子'
+        if: 'allin.ok'
+        goto: library-tinbox
+      - text: '看不出名堂。书就是书'
+        if: 'not allin.ok'
+        goto: library-under
+
+  library-tinbox:
+    title: 铁皮盒子
+    text: |
+      盒子里是一副望远镜的残骸：镜筒、两片镜片、一小卷铜线，还有一张字条。
+      「看塔用。别拿到太阳底下，会烧了下面的东西。」
+
+      你拿起一片镜片对着头顶的应急灯看，灯丝被放大成一个亮得过分的小点。
+      确实是看远处用的。
+    onEnter:
+      emit: ['allin/gain:lens', 'allin/gain:wire']
+    choices:
+      - text: 收起来，继续翻
+        goto: library-under
+
+  library-oilcloth:
+    title: 油布下面
+    text: |
+      油布下面不是书。是一个木箱，箱盖上压着一块石头，石头下面压着一张纸。
+
+      纸上只有一行字，写在四十年前的信纸上：
+      「我们把它埋在塔下了。谁看见这张纸，谁就别再往下问。」
+
+      你把石头搬开，撬开木箱。里面是一台半导体收音机，
+      旋钮停在 87.6，那个位置被人用指甲抠出了一道白痕。
+    onEnter:
+      emit: 'allin/gain:radio'
+    choices:
+      - text: 把纸叠好放回去，上去
+        goto: library-sealed
+
+  # ═══════════════════════════════════════════════ 哨站二层 · 电台室
+
+  outpost-upper:
+    title: 哨站 · 塌了一半的塔
+    text: |
+      哨站那个塌了的塔尖，底下还有一层能上人。铁梯锈了大半，但没断。
+      你爬到一半的时候听见上面有人在说话 —— 不是冲你说的，是对着什么东西说的。
+
+      「……第七号，第七号，这里是前哨 B-3，重复，这里——」
+      然后是很长一段安静。他又说了一遍。已经说了不知道多少遍。
+    choices:
+      - text: 爬上去
+        goto: fight-vet
+      - text: '（输入 check 聆听 12，先在梯子上一动不动地听）'
+        goto: chk-upper-listen
+      - text: 下去
+        goto: outpost-yard
+
+  chk-upper-listen:
+    title: 在梯子上听
+    text: |
+      你停住，把重量全放在脚掌上，听。
+      {allin.rollLine}
+    onEnter: { emit: 'allin/check:聆听:12' }
+    choices:
+      - text: '他不是在呼叫，他是在放录音 —— 磁头有杂音，那盘带子转了很多遍了'
+        if: 'allin.ok'
+        do: { 'flags.heardTape': true }
+        goto: fight-vet
+      - text: '听不清。风太大'
+        if: 'not allin.ok'
+        goto: fight-vet
+
+  fight-vet:
+    title: 二层上的人
+    text: |
+      他背对着你坐着，面前是一台电台，耳机挂在脖子上。
+      你踩响第三级铁梯的时候他没有回头，只是把耳机摘了下来。
+
+      「三十年了。」他说，「第一次听见有人上来。」
+      他站起来，把电台的音量拧到最小，很仔细，像是在关一盏灯。
+
+      「下面的狗你处理了？那是我养的。谢谢。」
+      他说谢谢的时候已经在拔刀了。
+    mode: battle
+    battle:
+      enemy: raider_vet
+      onWin: upper-after
+      onLose: down
+      onFlee: outpost-yard
+
+  upper-after:
+    title: 电台
+    text: |
+      他趴在电台边上，血从桌子缝里往下滴，滴在地板上，积成一小滩。
+
+      电台还开着。你把耳机挂回脖子上，戴上 ——
+      里面是底噪。长段的、连续的、什么都没有的底噪。
+      你拧旋钮，87.6 的位置上有一个极轻的东西，像是有人在很远的地方呼吸。
+
+      他口袋里有一块狗牌，两片，一片不是他的。绳是被扯断的。
+    extraText:
+      - if: 'flags.heardTape'
+        text: |
+          你把他那盘带子倒回去重放。前面三分钟是呼叫，第四分钟开始是他自己在说话：
+          「……今天还是没有。狗剩了半条腿，我给它缝了。缝的时候它没叫。
+          我不知道我在等什么，但我不能走。走了就没人回『收到』了。」
+    onEnter:
+      'flags.vetDown': true
+      emit: ['allin/gain:dogtag', 'allin/gain:tape', 'allin/gain:battery']
+    choices:
+      - text: 把电台关掉，下去
+        goto: outpost-yard
+      - text: 把电台关掉，对着麦克风说一句「收到」
+        do: { 'flags.answeredCall': true }
+        goto: upper-answered
+
+  upper-answered:
+    title: 收到
+    text: |
+      你按下发射键。键程很深，按到底要花点力气。
+
+      「收到。」你说。
+
+      松开键以后是死一样的安静。你等了十秒，二十秒。
+      然后底噪里那个很远的东西动了一下 —— 很轻，但确实是动了一下。
+      像是有人在很远的地方，也松开了发射键。
+
+      你把电台关了。关之前你把音量拧到了最小，像他那样。
+    choices:
+      - text: 下去
+        goto: outpost-yard

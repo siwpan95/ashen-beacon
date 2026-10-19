@@ -32,11 +32,28 @@ scenes:
 
   road-north:
     title: 北方公路
+    # 每次回到这个 hub 看到的不一样（cycle：按访问次数轮转，重绘不重抽）
+    variantMode: cycle
+    variants:
+      - |
+        公路在这儿断成几截，剩下的部分像被谁啃过。
+        路面加热过的沥青泛白，踩上去有细碎的响声。
+      - |
+        风起了。沙从路面上横着走，走到护栏那边堆成一小道埂。
+        你眯着眼走，沙子打在冲锋衣上有声音，像下雨。
+      - |
+        天阴了一层。远处的塔尖看不见了，只剩下铁架子那么一点轮廓。
+        这种天气走路最省力气，也最容易走错。
+      - |
+        太阳偏西了，影子拉得很长。你自己的影子走在你前面，
+        看起来比你有精神。
     text: |
       公路在这儿断成几截，剩下的部分像被谁啃过。
       路面加热过的沥青泛白，踩上去有细碎的响声。
 
       往北能看见哨站的轮廓，两个塔尖，塌了左边一个。
+      再往北一点，有座水塔立在那儿，孤零零的。
+      东北方向竖着一座信号中继塔，风大的时候能听见它在响。
       东边昨天夜里塌了半面墙，说不定还有零碎可拣。
       西边那座山上有块图书馆的招牌，字掉了一半。
       南边有烟。有人在生火。
@@ -56,6 +73,10 @@ scenes:
         goto: library-hill
       - text: 往南，找有烟的地方
         goto: scav-camp
+      - text: 去北边那座水塔
+        goto: water-tower
+      - text: 往东北，铁架子那边
+        goto: relay-station
       - text: 蹲下来歇一会儿，处理一下伤口
         goto: rest-fire
       - text: 下到公路下方的凹槽里去（那边有点动静）
@@ -87,6 +108,9 @@ scenes:
       - text: 抠出卡在混凝土里的废钢筋
         do: { emit: 'allin/gain:scrap' }
         goto: wreck-site
+      - text: 掀开那块翘起来的水泥板（下面有风）
+        once: 'wreck-cellar-open'
+        goto: wreck-cellar
       - text: 这儿没什么了，回公路
         goto: road-north
 
@@ -152,6 +176,9 @@ scenes:
       - text: '试着增厚一点自己的本事（消耗 CP）'
         once: 'lib-train'
         goto: { call: camp-train }      # 隧道调用 —— camp-train 的 @return 才有栈可弹
+      - text: 地板有一块敲上去发闷 —— 掀开看看
+        once: 'lib-under'
+        goto: library-under
       - text: 出去，回公路
         goto: road-north
 
@@ -207,6 +234,15 @@ scenes:
       - text: 花点时间打磨自己（消耗 CP）
         once: 'camp-train'
         goto: { call: camp-train }
+      - text: 找老陈坐下来聊聊
+        once: 'camp-talk-once'
+        goto: camp-talk
+      - text: '三日集正开着，去看看行情'
+        goto: camp-market
+      - text: 头子朝你招手（丢药的事）
+        if: 'not allin.solved.camp_dilemma'
+        once: 'camp-dilemma-once'
+        goto: camp-dilemma
       - text: 转身走人，回公路
         goto: road-north
 
@@ -303,6 +339,7 @@ scenes:
       - text: 什么都不说，把背囊甩到地上，拉开架势
         goto: fight-raider
       - text: 后退一步，客客气气地退出这块地方
+        do: { 'flags.sparedRaider': true }   # 记一笔：他记住你了，塔下还会再见
         goto: road-north
 
   fight-raider:
@@ -377,6 +414,9 @@ scenes:
         goto: yard-well
       - text: 沿水泥坡道往下，去真正的地堡
         goto: collapse-tunnel
+      - text: 爬那个塌了一半的塔尖（上面有声音）
+        once: 'yard-upper'
+        goto: outpost-upper
       - text: 退出院子，回公路
         goto: road-north
 
@@ -581,6 +621,19 @@ scenes:
       你也可以带着它走出去。它是这世界上最值钱的东西，能换一条命，或者十条。
 
       你也可以什么都不做。把它放回抽屉里，转身爬那三十一级台阶。
+
+      还有第四种：把它带出去，交给别人 —— 交给那些比你更知道该拿它怎么办的人。
+      以及第五种：哪儿也不去，留在这儿。
+    extraText:
+      - if: 'flags.sparedRaider'
+        text: |
+          身后的楼梯上有脚步声。很轻，但一直在。
+          那个瘦高个跟了你一路 —— 公路下那次你让他走了，他记住了你这张脸，
+          也记住了你往哪儿走。
+      - if: 'flags.answeredCall'
+        text: |
+          墙上那排开关里有一个在闪。你认得那个闪法 —— 那是有人在那头按着发射键不放。
+          二层上那个人等了三十年，等的就是这个。
     choices:
       - text: 把它按进发射机
         if: 'allin.item.core >= 1'
@@ -588,8 +641,17 @@ scenes:
       - text: 把它塞进背囊最深处
         if: 'allin.item.core >= 1'
         goto: end-core
+      - text: '带出去，交给别人决定（你认识该交给谁）'
+        if: 'allin.item.core >= 1 and (flags.savedCamp or flags.freedKid or flags.knowsHer)'
+        goto: end-handoff
+      - text: '哪儿也不去。留在这儿，接他的班'
+        if: 'flags.answeredCall'
+        goto: end-stay
       - text: 放回抽屉，转身
         goto: end-walk
+      - text: '先解决身后那个人'
+        if: 'flags.sparedRaider'
+        goto: fight-below
 
   end-beacon:
     title: 结局 · 一次广播
@@ -608,6 +670,18 @@ scenes:
       它在说：这儿还有人。
 
       （完）
+    extraText:
+      - if: 'allin.signal >= 6'
+        text: |
+          你带下来的那些零碎 —— 天线、电池、镜片、铜线 —— 全用上了。
+          功率表的指针走到红线右边，还往右走了一格。
+          后来很远的地方有人听见了。比你想的远得多。
+      - if: 'allin.signal < 3'
+        text: |
+          功率表的指针走到红线就停住了。你没带够东西上来 ——
+          这台机器剩下的电只够喊一声，喊得出去多远，看天意。
+      - if: 'flags.savedCamp'
+        text: 三个月后南边来人了。他们说井里有水了，问是不是你干的。你说是水泵自己好的。
 
   end-core:
     title: 结局 · 带走
@@ -623,6 +697,16 @@ scenes:
       那座塔从那天起再没响过。
 
       （完）
+    extraText:
+      - if: 'flags.strippedPump'
+        text: |
+          你路过南边的时候营地已经空了。井没水，人得跟着水走。
+          你在空灶里看见半截铜线，认得那是你抽走的那截 ——
+          不对，你抽走的那截在你背囊里。这半截是别人抽的。
+      - if: 'flags.handedKid'
+        text: |
+          换东西那家人问你：北边还有没有人。你说有。
+          他们又问：那你为什么回来了。你没答上来。
 
   end-walk:
     title: 结局 · 转身
@@ -637,6 +721,88 @@ scenes:
 
       你往南走了三公里，才想起自己忘了件事：
       你始终不知道自己叫什么名字。
+
+      （完）
+    extraText:
+      - if: 'flags.freedKid'
+        text: |
+          往南的路上你碰见个瘦得像柴的丫头，一个人走，脚上没鞋。
+          她看了你一眼，认出你了，什么也没说，往北去了。
+          你也没说话。你们错身的时候她轻轻碰了一下你的袖子。
+      - if: 'flags.walkedAway'
+        text: |
+          营地丢药那件事后来怎么样了，你没打听。
+          有些事你不插手，它就永远停在你没插手的那一秒，谁也不用负责。
+
+  # ── 延迟后果：公路下你放过的那个人，在塔下堵你
+
+  fight-below:
+    title: 楼梯上的人
+    text: |
+      「我跟着你走了两天。」他把枪从背后转到前面，动作很慢，像怕你误会。
+      「公路那次你没下死手。我记着这个。但我也记着 —— 你要拿的那个东西，
+      能换我一条命，也能换我全家。」
+
+      他往前挪了半步。「所以要么你给我，要么我动手。你挑。」
+
+      你说不上来他是不是在道歉。也许这就是他的道歉方式。
+    mode: battle
+    battle:
+      enemy: raider_vet
+      onWin: below-after
+      onLose: down
+      onFlee: core-room
+
+  below-after:
+    title: 他躺在台阶上
+    text: |
+      他倒下去以后手还张着，像是要接什么东西。
+      你把他的枪踢到一边，蹲下来翻他的口袋 ——
+      一张照片，边角磨白了，照片上是四个人，站在一栋还没塌的楼前面。
+      背面写着一行字：「等我们回来拍第二张。」
+
+      你没拿他的东西。你只是把照片塞回他手里，把他的手合上。
+    onEnter:
+      'flags.sparedRaider': false
+      emit: 'allin/gain:scrap:2'
+    choices:
+      - text: 回到核心室
+        goto: core-room
+
+  # ── 结局光谱：不是好坏排序，是五种不同的活法
+
+  end-handoff:
+    title: 结局 · 交给别人
+    text: |
+      你把它带出了三十一级台阶，带出了院子，带到了南边。
+
+      老陈看了很久，没伸手。「这玩意儿我不敢接。」
+      「那就别接。」你说，「找个敢的。」
+
+      后来是那个婆娘接的。她捧着它坐在摊子后面，坐了一整个下午，
+      谁买东西她都不抬头。第二天她收了摊，往北去了 ——
+      她说她男人是往北那十几个里的一个，她要去把他那份也发了。
+
+      你留在营地，替她看着摊子。有人来问她去哪儿了，你说：往北了。
+
+      三个月以后，塔响了。响的不是你发出来的，但你听见了。
+
+      （完）
+
+  end-stay:
+    title: 结局 · 接他的班
+    text: |
+      你把发射机旁边那把椅子拉出来，坐上去。椅子还是温的。
+
+      第一个月你每天呼叫两次，早上一次，晚上一次，没有回音。
+      第二个月你把二层那台电台搬了下来，两台并着用，功率大了一倍。
+      第三个月的一个夜里，底噪里有个东西动了一下。你按下发射键，说：「收到。」
+
+      你不知道那头是谁。也许是一台机器，也许是另一个像你一样坐下来的人。
+      但你们对上了。
+
+      你在这儿待了很多年。后来有人管这座塔叫「灰烬信标」，
+      管塔里那个人叫「守塔的」。没人知道他叫什么，包括他自己。
 
       （完）
 
