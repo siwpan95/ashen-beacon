@@ -1,0 +1,77 @@
+# 《灰烬信标》工程清单 —— dse-core 的插件 + allin-engine 的桥。
+#
+# 前四个是 dse 内核（scenes/state/io/engine），最后一个是自定义插件：
+# name 写「模块.类名」，由 sdk._resolve_plugin 动态 import，
+# 它会把 allin-engine 的战斗/角色/背包/谜题接进来。
+
+- id: scenes
+  config:
+    packs:
+      - ./content/beacon.yml
+
+- id: state
+  config:
+    initial:
+      name: 柯岚
+      # allin.* 全部由 bridge.AllinBridge.pull() 每步覆写；
+      # 这里预置只是为了让条件表达式在首帧就有定义（否则会刷 未定义 告警）。
+      allin:
+        hp: 0
+        maxHp: 0
+        pct: 100
+        hurt: false
+        alive: true
+        floor: false
+        bagSize: 0
+        cards: 0
+        locales: 0
+        ok: false
+        lastRoll: ''
+        rollLine: ''
+        skill: 侦察
+        dc: 10
+        item: {}
+        tech: {}
+        solved: {}
+      roadTrips: 0
+      flags:
+        dogDown: false
+        raiderDown: false
+        watcherDown: false
+        campTold: false
+        wounded: false
+        threwRock: false
+        sawCamera: false
+        looting: false
+      onceSeen: []
+
+- id: io
+
+- id: engine
+  config:
+    entry: prologue
+    prompt: '> '
+    maxHistory: 60
+
+- id: achievements
+  config:
+    list:
+      - id: first-blood
+        name: 第一次见血
+        desc: 放倒了一个活人
+        when: 'flags.raiderDown'
+      - id: lockbreaker
+        name: 手艺人
+        desc: 撬开了 B-3 值班终端的口令
+        when: 'allin.solved.bunker_terminal'
+      - id: lumen
+        name: 关灯的人
+        desc: 放倒了守望者 RM-07
+        when: 'flags.watcherDown'
+      - id: roadtripper
+        name: 走得够远
+        desc: 到过 12 处以上的地方
+        when: 'allin.locales >= 12'
+
+- id: bridge
+  name: bridge.AllinBridge
