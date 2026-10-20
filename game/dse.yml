@@ -71,7 +71,11 @@
         marketCredited: false
       onceSeen: []
 
+# IO 换成 project 侧的加固子类：内置 ConsoleIO 的 ask() 只 catch EOFError，
+# 碰到非 UTF-8 输入（中文 Windows 终端发 GBK）会抛 UnicodeDecodeError，
+# 一路冒到 engine.start 的兜底，把整局游戏中止掉。详见 console_safe.py。
 - id: io
+  name: console_safe.SafeConsoleIO
 
 - id: engine
   config:

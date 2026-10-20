@@ -198,6 +198,27 @@ do:      { emit: 'allin/train:活力' }           # 技能升级
 | 掠夺者·老兵 | 91% | **50%** | 5.8 | 守着电台室，残血上去就是赌命 |
 | 守望者 RM-07 | 93% | 82% | 7.6 | Boss：长局，要留牌 |
 
+## 测试
+
+```bash
+python tools/test_interactive.py   # 23 项：交互模式边界（EOF / 坏编码 / Ctrl+C / 战斗中途断流）
+python tools/test_keyboard.py      # 真实按键投递（Windows；环境不满足返回 2，不算失败）
+python tools/sim.py                # 战斗平衡
+python play.py --check             # 内容体检
+```
+
+`test_interactive.py` 走**真 stdin 管道**，不走 `DSE_INPUT`，所以能覆盖 `--script` 到不了的交互分支。改 `console_safe.py` 或 `play.py` 的输入路径后跑一遍。
+
+`test_keyboard.py` 会先探测目标进程的 `stdin` 是否真挂在控制台上（`GetConsoleMode`），探测不过就报「环境不满足」并跳过 —— 它**不会**把「写入成功但游戏没反应」当成通过。要在真实终端里跑。<br>
+曾经踩的坑：`CREATE_NEW_CONSOLE` 能开窗口，但子进程 `stdin` 仍继承父进程 ConPTY 的管道，此时 `WriteConsoleInput` 返回 `ok=1` 却毫无效果。<br>
+想试 `--via-pynput` 那条通道得额外 `pip install pynput`（不在 `requirements.txt` 里 —— 跑游戏不需要它）。
+
+## 输入编码
+
+交互模式的输入走 `console_safe.SafeConsoleIO`（替换 dse 内置的 `ConsoleIO`）。上游只 catch 了 `EOFError`，**解码失败会把整局打崩**：中文 Windows 控制台（ACP=936）发 GBK 字节，而 Python 3.13 默认 UTF-8，一敲中文就可能踩到。现在 `UnicodeDecodeError` 会被提示一次并当作空输入；`Ctrl+C` 与终端失联也会正常退出而不是甩 traceback。
+
+如果你在 GBK 终端上被提示「这一行不是 UTF-8」，换成 UTF-8 终端，或只用数字/英文命令。
+
 普通敌人满血必胜但会掉血——真正的威胁是**连续遭遇不休整**。
 老兵和 Boss 得带够状态再上；`rest-fire`（公路边的火堆）就是干这个的。
 
@@ -238,10 +259,13 @@ game/
 ├── play.py              启动器（--check / --script / --entry）
 ├── dse.yml              插件清单：scenes/state/io/engine + dialogue/trade/成就 + 桥
 ├── bridge.py            ★ 双引擎桥接（dse Service 插件）
+├── console_safe.py      输入加固层（替换 dse 的 ConsoleIO）
 ├── data.py              物品 / 敌人 / 卡组 / 谜题 / 配方 / 开局配点
 ├── content/beacon.yml   主线 + 结局（第一批）
 ├── content/wasteland.yml 外圈区域：水站/中继站/地下室/书库/电台室/营地对话集市（第二批）
 ├── tools/sim.py         战斗平衡模拟（贪心 AI，每敌 300 场）
+├── tools/test_interactive.py 交互模式边界测试（23 项）
+├── tools/test_keyboard.py    真实按键投递测试（Windows）
 ├── viz/                 ★ 纹理贴图出图（noise/datatex/canvas/charts/report）
 ├── out/                 战报与角色卡（运行时生成）
 └── saves/               存档（运行时生成）
