@@ -22,7 +22,9 @@ try:
     from PIL import Image as _Image  # noqa: F401
 
     AVAILABLE = True
-except ImportError:  # pragma: no cover - 没装依赖时走这里
+except (ImportError, OSError):  # pragma: no cover - 没装依赖 / 装坏了都走这里
+    # OSError 也要接：numpy、Pillow 半损坏时（DLL 缺失等）抛的是 OSError 而非
+    # ImportError，只接 ImportError 会让「出图坏了」升级成「游戏起不来」。
     AVAILABLE = False
 
 if AVAILABLE:

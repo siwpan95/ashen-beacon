@@ -59,9 +59,6 @@ ITEMS: dict[str, dict] = {
                  description="半瓶。瓶身上的手写字被油泡糊了，只剩「别」字。"),
 }
 
-I2N = {k: v["name"] for k, v in ITEMS.items()}
-
-
 def make_item(item_id: str, quantity: int = 1) -> InventoryItem:
     """按 ID 造一个 InventoryItem（缺省数量可被覆盖）。"""
     spec = ITEMS[item_id]
@@ -256,12 +253,9 @@ RECIPES: dict[str, dict] = {
     "makeshift_kit": dict(name="凑合的急救包", needs=[("wire", 1), ("ration", 1)],
                           yields=("medkit", 1),
                           description="绷带没有，用布和一点点运气。"),
-    "flare_up": dict(name="再糊一根信号棒", needs=[("fuel", 1), ("scrap", 1)],
-                     yields=("flare", 1),
-                     description="油布缠紧，烧起来一样是红的。"),
-    "filter": dict(name="滤水芯", needs=[("mask", 1), ("wire", 1)],
-                   yields=("water", 2),
-                   description="滤罐拆开，碳芯还能再顶一阵。"),
+    # 已删除 flare_up（需 fuel）与 filter（需 mask）：
+    # 这两种材料的产出点在 69 个场景里是 0，配方永远做不出来，却还列在
+    # `recipes` 里让玩家反复找材料。等以后真给 fuel / mask 加了掉落再恢复。
     "antenna": dict(name="天线", needs=[("wire", 2), ("lens", 1), ("battery", 1)],
                     yields=("radio", 1),
                     description="铜线绕成圈，镜片当反射面 —— 老办法，但管用。"),

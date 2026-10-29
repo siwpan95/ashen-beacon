@@ -45,6 +45,13 @@ SHEET = {
 
 
 def main() -> int:
+    # 没装 numpy / Pillow 时 report 是 None，直接调会抛
+    # AttributeError: 'NoneType' object has no attribute 'battle_report'。
+    if report is None:
+        print("  出图需要 numpy 和 Pillow：")
+        print("    pip install numpy pillow")
+        return 1
+
     OUT.mkdir(parents=True, exist_ok=True)
     a = report.battle_report(BATTLE, OUT / "demo_battle.png")
     b = report.character_sheet(SHEET, OUT / "demo_sheet.png")

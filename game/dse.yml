@@ -17,27 +17,30 @@
       # allin.* 全部由 bridge.AllinBridge.pull() 每步覆写；
       # 这里预置只是为了让条件表达式在首帧就有定义（否则会刷 未定义 告警）。
       allin:
+        # 只预置内容真正会读的键；pct/hurt/alive/floor/bagSize/cards/lastRoll
+        # 全仓零引用，已从 pull() 与这里一并清掉。
         hp: 0
         maxHp: 0
-        pct: 100
-        hurt: false
-        alive: true
-        floor: false
-        bagSize: 0
-        cards: 0
         locales: 0
         ok: false
-        lastRoll: ''
         rollLine: ''
         skill: 侦察
         dc: 10
         item: {}
         tech: {}
-        solved: {}
+        # 谜题通关标记必须逐个预置成 false：@restart 会把 state 复位到 initial，
+        # 而成就插件在 pull() 之前就求值，这一刻 allin.solved.bunker_terminal
+        # 是未定义的 —— 战败重开时会刷两条「条件求值失败」告警。
+        solved:
+          bunker_terminal: false
+          relay_fuse: false
+          camp_dilemma: false
+        # 信号强度：pull() 每步覆写，但复位的那一瞬要先有定义，
+        # 否则内容里的 allin.signal >= 6 同样会刷告警。
+        signal: 0
       roadTrips: 0
-      # 累积变量（调研要点：用一个计数代替一堆布尔）—— 声望与信号强度
+      # 累积变量（调研要点：用一个计数代替一堆布尔）
       cred: 0
-      signal: 0
       # 经营插件的状态键：不预置的话，成就里写 tradeProfit > 0 会每次求值刷告警
       gold: 0
       tradeProfit: 0
@@ -68,7 +71,11 @@
         marketCredited: false
       onceSeen: []
 
+# IO 换成 project 侧的加固子类：内置 ConsoleIO 的 ask() 只 catch EOFError，
+# 碰到非 UTF-8 输入（中文 Windows 终端发 GBK）会抛 UnicodeDecodeError，
+# 一路冒到 engine.start 的兜底，把整局游戏中止掉。详见 console_safe.py。
 - id: io
+  name: console_safe.SafeConsoleIO
 
 - id: engine
   config:

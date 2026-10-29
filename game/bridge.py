@@ -20,9 +20,7 @@ pull() 会把所有「可能出现的数据键」都补上缺省值（False / 0�
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -45,6 +43,11 @@ from data import (
 try:  # 出图依赖 numpy/Pillow；没装就静默关闭，游戏本体照常跑
     from viz import AVAILABLE as VIZ_AVAILABLE
 except Exception:  # noqa: BLE001 - 任何导入问题都不该影响游戏
+    VIZ_AVAILABLE = False
+
+# 出图是同步阻塞的（战报一次 6~8 秒），必须给玩家一个关掉的开关。
+# DSE_NO_VIZ=1 或 play.py --no-viz 都走这里。
+if os.environ.get("DSE_NO_VIZ", "").strip().lower() in ("1", "true", "yes", "on"):
     VIZ_AVAILABLE = False
 
 TECHNIQUES = list(LEARN_TECHNIQUES)
@@ -112,10 +115,12 @@ class AllinBridge(Service):
     def setup(self) -> None:
         self.combat: object | None = None          # allin CombatState
         self.combat_cfg: dict = {}
-        self.combat_start_hp = 0
         self.battle_pending: dict | None = None
         self.puzzle_active: str | None = None
-        self.log_lines: list[str] = []
+        # allin 的 PuzzleSystem 不校验 attempts_allowed（data.py 里写了 3 但没生效），
+        # 只能在 bridge 侧自己数。按 puzzle_id 累计 —— 若按「进入次数」清零，
+        # 玩家出去再进来就能白拿三次新机会。
+        self.puzzle_attempts: dict[str, int] = {}
         self.telemetry: dict | None = None   # 当前战斗的遥测数据（喂给战报出图）
         self._telem_pre: tuple | None = None
 
@@ -222,7 +227,7 @@ class AllinBridge(Service):
                 self.on(name, lambda _s=skill, _d=dc: self.check(_s, _d))
             elif name == "allin/rest":
                 self.on(name, self._ev_rest)
-            if name == "allin/rebirth":
+            elif name == "allin/rebirth":
                 # dse 的 @restart 只重置 dse 自己的 state，allin 的角色不会跟着回血 ——
                 # 不挂这个钩子的话，重开时必须带着 0 HP 再走一遍。
                 self.on(name, self._ev_rebirth)
@@ -240,7 +245,13 @@ class AllinBridge(Service):
                 # 收市：钱换回废铁，余数留着（下次进集市接着用）
                 self.on(name, self._ev_market_close)
             elif name.startswith("allin/lose:"):
-                self.on(name, lambda _n=name: self.lose(_n.split(":", 1)[1]))
+                # allin/lose:<物品>[:<数量>] —— 数量缺省 1
+                # 必须用和 allin/pay: 一样的三段解析：split(":", 1) 会把 "wire:2"
+                # 整个当成物品名，物品表里查不到就直接 return —— 静默 no-op，
+                # 结果是「消耗 2 铜线」的分支根本不扣东西，玩家白拿奖励。
+                parts = name.split(":")
+                n = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
+                self.on(name, lambda _i=parts[1], _n=n: self.lose(_i, _n))
             elif name.startswith("allin/pay:"):
                 # allin/pay:<物品>:<数量> —— 交易用；数量缺省 1（避免整堆扣光）
                 parts = name.split(":")
@@ -264,14 +275,12 @@ class AllinBridge(Service):
         mx = max(1, int(self.char.max_hp))
         st.set("allin.hp", hp)
         st.set("allin.maxHp", mx)
-        st.set("allin.pct", max(0, min(100, int(hp / mx * 100))))
-        st.set("allin.hurt", hp < mx)
-        st.set("allin.alive", hp > 0)
+        # 只写内容真正会读的键。pct / hurt / alive / floor / bagSize / cards /
+        # lastRoll 全仓零引用，每步白算一次还随存档落盘，已清掉。
 
         # 物品：全部 ID 都写，缺省 0（避免条件表达式引用未定义键时刷告警）
         for item_id in ITEMS:
             st.set(f"allin.item.{item_id}", self.inv.count(item_id))
-        st.set("allin.bagSize", self.inv.item_count)
 
         # 技术
         for tech in TECHNIQUES:
@@ -281,15 +290,16 @@ class AllinBridge(Service):
         for spec in PUZZLES:
             st.set(f"allin.solved.{spec['puzzle_id']}", self.puzzles.is_solved(spec["puzzle_id"]))
 
-        st.set("allin.cards", self.deck.count)
         st.set("allin.locales", self.world.get_data("known_locales", 0) or 0)
 
         # 累积变量：信号强度 = 你身上所有跟「收/发」有关的东西凑出来的值。
         # 终章按这个值决定广播能传多远 —— 一件件小事攒出来的结局差异。
+        # radio 权重取 4：组装一台整机要 wire×2 + lens + battery（4 点零件），
+        # 成品只值 2 点的话「攒齐一套设备」反而让 signal 净降 2、成就更难拿。
+        # 4 点正好让合成前后持平（自然收集上限 13→15，结局分档与阈值 6 都仍可达）。
         st.set("allin.signal",
-               self.inv.count("radio") * 2 + self.inv.count("battery")
+               self.inv.count("radio") * 4 + self.inv.count("battery")
                + self.inv.count("lens") + self.inv.count("wire"))
-        st.set("allin.floor", hp <= int(mx * 0.3))
 
     # ------------------------------------------------------------ 物品 / 角色
 
@@ -377,6 +387,7 @@ class AllinBridge(Service):
     def _open_puzzle(self, pid: str) -> None:
         """进入谜题场景：把题干打出来；道德困境额外列出可选项。"""
         self.puzzle_active = pid
+        self.puzzle_attempts.setdefault(pid, 0)
         spec = self.puzzles.get_puzzle(pid)
         if spec is None:
             return
@@ -415,14 +426,25 @@ class AllinBridge(Service):
         self.pull()
 
     def use(self, item_id: str) -> None:
+        # 防御纵深：入口（restore_allin）已经过滤过未知 id，这里再兜一道 ——
+        # 否则走到 ITEMS[item_id]['name'] 会 KeyError，直接把游戏打退出（exit 1）。
+        if item_id not in ITEMS:
+            self.ctx.io.print(f"  [认不出的东西：{item_id}]")
+            return
         if self.inv.count(item_id) <= 0:
             self.ctx.io.print("  你没有这个东西。")
             return
         if item_id == "medkit":
+            if self.char.current_hp >= self.char.max_hp:
+                self.ctx.io.print("  身上没有要缝的口子，留着吧。")
+                return
             self.inv.remove(item_id, 1)
             self.ctx.io.print(f"  你咬着袖子把凝血胶按上去。{self.char.heal(12)}")
             self.pull()
         elif item_id == "ration":
+            if self.char.current_hp >= self.char.max_hp:
+                self.ctx.io.print("  还不到饿的份上，先留着。")
+                return
             self.inv.remove(item_id, 1)
             self.ctx.io.print(f"  口粮下肚，胃里踏实了点。{self.char.heal(4)}")
             self.pull()
@@ -454,7 +476,6 @@ class AllinBridge(Service):
         st = self.ctx.state
         line = str(self.char.d20_check(skill, dc)).strip()
         st.set("allin.ok", "成功" in line)
-        st.set("allin.lastRoll", line)
         st.set("allin.rollLine", line)
         self.ctx.io.print(f"  🎲 {line}")
         self.pull()
@@ -467,7 +488,9 @@ class AllinBridge(Service):
     # ------------------------------------------------------------ 事件回调
 
     def _on_char_changed(self, data) -> None:
-        self.log_lines.append(f"character:{data}")
+        # 订阅位：角色属性变化时引擎会调到这里。
+        # 原来只往一个从不被读的 log_lines 里 append，纯白占内存，已去掉。
+        pass
 
     def _on_puzzle_solved(self, data) -> None:
         self.ctx.io.print(f"  ✦ 谜题解开：{data.get('title')}")
@@ -529,7 +552,6 @@ class AllinBridge(Service):
 
         hp = int(self.char.current_hp or 1)
         mx = max(1, int(self.char.max_hp))
-        self.combat_start_hp = hp
         self.combat_log = []
         self.telemetry = {
             "enemy": inst.name,
@@ -630,8 +652,11 @@ class AllinBridge(Service):
             return self._maybe_finish() or {"type": "noop"}
 
         if low in ("f", "flee", "逃跑"):
+            # 逃跑要保留「战斗当时的 HP」，不能传 0：
+            # 内容层没有任何死亡判定，0 HP 的玩家照样能在世界上走，
+            # 下一场战斗 begin_battle 的 int(current_hp or 1) 兜底成 1 HP，等于必死。
+            self._sync_hp_back(st.player_hp)
             self.combat = None
-            self._sync_hp_back(0)
             io.print("  你退开半步，然后开始跑。它追了两步就放弃了——值不当。")
             target = self.combat_cfg.get("onFlee")
             if not target:
@@ -714,7 +739,9 @@ class AllinBridge(Service):
                 "player_max_hp": int(self.char.max_hp),
                 "enemy_max_hp": int(t.get("enemy_max_hp") or max(t["enemy_series"] + [1])),
             })
-            stamp = time.strftime("%Y%m%d_%H%M%S")
+            # 时间戳只到秒：同一秒内连打两场会互相覆盖（脚本跑图很容易触发）。
+            # 补三位毫秒，既保持可读也让文件名唯一。
+            stamp = time.strftime("%Y%m%d_%H%M%S") + f"{int(time.time() * 1000) % 1000:03d}"
             path = battle_report(t, self._out_dir() / f"battle_{stamp}.png")
             self.ctx.io.print(f"  ✦ 战报已生成：{path.name}")
         except Exception as exc:  # noqa: BLE001 - 出图问题不影响游戏
@@ -761,6 +788,12 @@ class AllinBridge(Service):
         raw = line.strip()
         low = raw.lower()
 
+        # 战斗中把战斗态的 HP 实时写回角色。
+        # char.current_hp 在战斗全程停在战前值（只在战斗结束/逃跑时才同步），
+        # 不同步的话战斗里 stats / save 读到的都是上一场结束时的血 —— 看着像凭空回血。
+        if self.combat is not None and not self.combat.combat_over:
+            self._sync_hp_back(self.combat.player_hp)
+
         if low in ("help", "?") and not (self.combat and not self.combat.combat_over):
             self.do_help()
             return {"type": "noop"}
@@ -772,6 +805,10 @@ class AllinBridge(Service):
                 self.ctx.state.set("allin.skill", skill)
                 self.ctx.state.set("allin.dc", int(dc) if dc.isdigit() else 10)
                 self._ev_check()
+            else:
+                # 少写 DC 时原来是静默 no-op：玩家敲完什么都没发生，很容易以为
+                # 判断没生效。这里明确给用法。
+                self.ctx.io.print("  用法：check <技能> <DC>，例如 check 侦察 11")
             return self._refresh()
 
         if low.startswith("use "):
@@ -781,13 +818,27 @@ class AllinBridge(Service):
         if low.startswith("answer "):
             guess = raw.split(None, 1)[1].strip()
             if self.puzzle_active:
-                res = self.puzzles.verify_answer(self.puzzle_active, guess)
+                pid = self.puzzle_active
+                limit = next(
+                    (p.get("attempts_allowed") for p in PUZZLES
+                     if p.get("puzzle_id") == pid), None)
+                tried = self.puzzle_attempts.get(pid, 0)
+                # data.py 里三个谜题都写了 attempts_allowed: 3，但 allin 的
+                # PuzzleSystem 根本不看这个字段 —— 不自己拦就能无限试。
+                if limit and tried >= int(limit):
+                    self.ctx.io.print("  终端锁了 —— 你已经试够了次数。")
+                    return self._refresh()
+                res = self.puzzles.verify_answer(pid, guess)
                 self.ctx.io.print(f"  {res['message']}")
                 if res["success"]:
                     self._grant_rewards(res.get("rewards"))
                     self.puzzle_active = None
-                elif res.get("hint"):
-                    self.ctx.io.print(f"  提示：{res['hint']}")
+                else:
+                    if res.get("hint"):
+                        self.ctx.io.print(f"  提示：{res['hint']}")
+                    self.puzzle_attempts[pid] = tried + 1
+                    if limit and self.puzzle_attempts[pid] >= int(limit):
+                        self.ctx.io.print("  你试得太多次了，这东西不打算再给你机会。")
                 return self._refresh()
             return None
 
@@ -809,7 +860,8 @@ class AllinBridge(Service):
 
         if low == "save" or low.startswith("save "):
             return self.do_save(raw)
-        if low.startswith("load "):
+        # save 不带槽号默认存槽 1，load 却必须带 —— 不对称会让玩家很困惑。
+        if low == "load" or low.startswith("load "):
             return self.do_load(raw)
         if low in ("slots", "存档"):
             for slot in self.saves.list_saves():
@@ -817,6 +869,17 @@ class AllinBridge(Service):
             return {"type": "noop"}
 
         if self.combat is not None and not self.combat.combat_over:
+            if low in ("rollback", "rb", "back"):
+                # 回滚前必须清掉战斗态，否则会留下「幽灵战斗」：
+                # dse 回到上一场景、照常列出选项，旧战斗却还活着，
+                # 把玩家的场景选项输入劫持成出牌，两个选项都选不了。
+                # 注意 engine.rollback() 全程不 emit，没有事件钩子可挂，只能在这里拦。
+                # 三者一起清，和 do_load 对齐（只清 combat 会在 battle_pending
+                # 场景留下同类的幽灵状态）。
+                self.combat = None
+                self.battle_pending = None
+                self.puzzle_active = None
+                self.combat_log = []
             if low in _PASSTHROUGH:
                 return None
             return self.combat_input(raw)
@@ -893,6 +956,10 @@ class AllinBridge(Service):
         slot = 1
         if len(parts) > 1 and parts[1].isdigit():
             slot = int(parts[1])
+        # 战斗中存档：HP 已在 _on_command 开头同步过，但战斗态本身不进存档，
+        # 读档会回到本场战斗第 1 回合 —— 先讲清楚，别让玩家以为存下了半场战斗。
+        if self.combat is not None and not self.combat.combat_over:
+            self.ctx.io.print("  [战斗中存档：读档后本场战斗会从头再来]")
         self.pull()
         payload = {
             "scene": self.ctx.engine.current,
@@ -909,6 +976,11 @@ class AllinBridge(Service):
         data = self.saves.load(slot)
         if not data:
             self.ctx.io.print("  这个槽位是空的。")
+            return {"type": "noop"}
+        # 存档是明文 JSON：手改坏、被别的版本写过、写到一半断电，都会走到这里。
+        # 原来直接 data["dse"] 会 KeyError 把整个游戏打退出（exit 1）。
+        if not isinstance(data, dict) or not isinstance(data.get("dse"), dict):
+            self.ctx.io.print("  存档损坏：读不出内容，换个槽位试试。")
             return {"type": "noop"}
         self.ctx.state.restore(data["dse"])
         self.restore_allin(data.get("allin") or {})
@@ -938,12 +1010,25 @@ class AllinBridge(Service):
         }
 
     def restore_allin(self, snap: dict) -> None:
+        # attributes / skills 是「同一对象的原地 update」——本来就是对的，不要动。
         self.char.attributes.update(snap.get("attributes") or {})
         self.char.skills.update(snap.get("skills") or {})
+
+        # 技术：权威存储是 char.techniques（== char.ctx.state.techniques，透明代理）。
+        # 直接写 list，不用 purchase_technique() —— 它会重扣 CP，且查前置技能不满足时
+        # 「静默失败不报错」，读档时若技术与技能的恢复顺序有任何错位就会静默丢技术。
         for t in snap.get("techniques") or []:
             if t not in TECHNIQUES:
-                TECHNIQUES.append(t)
-        self.char.current_hp = int(snap.get("hp") or 0)
+                self.ctx.io.print(f"  [存档里有认不出的技术：{t}，已跳过]")
+                continue
+            if t not in self.char.techniques:
+                self.char.techniques.append(t)
+
+        # HP 钳到 [0, max_hp]：存档是明文 JSON，玩家能把 hp 写成任意整数（含负数）。
+        # 钳制是「损坏检测」不是「防篡改」——手改存档是单机玩家的正常玩法，
+        # 我们要做的只是别让坏数据把游戏搞崩。
+        mx = max(1, int(self.char.max_hp))
+        self.char.current_hp = max(0, min(mx, int(snap.get("hp") or 0)))
 
         # 卡组：从 card_library 取原型重建（get_card 返回副本，安全）
         self.deck = CardDeck()
@@ -961,7 +1046,14 @@ class AllinBridge(Service):
             restored = None
         self.inv.clear()
         if restored is not None:
+            # 入口过滤：Inventory.from_dict() 对未知 id 零过滤，脏 id 会一路带到
+            # use() 的 ITEMS[item_id]['name'] 上炸 KeyError。这里是唯一入口，堵在这。
+            # 跳过 + 告警而不是拒绝整档 —— 内容改版删物品时，老存档会带
+            # 「当时合法、现在未知」的 id，整档拒绝会直接报废合法老档。
             for item in restored.list_all():
+                if item.item_id not in ITEMS:
+                    self.ctx.io.print(f"  [存档里有认不出的东西：{item.item_id}，已跳过]")
+                    continue
                 self.inv.add(item)
 
         # PuzzleSystem 不随档走，把通关过的谜题回放一遍重建 solved 标记
